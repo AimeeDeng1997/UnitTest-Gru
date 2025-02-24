@@ -1,5 +1,5 @@
 ## 分支说明：
-- original_pro：分支作为 fork 源项目的存档分支，测试 cursor、windsuf 可基于这个分支创建测试分支
+- original_pro： fork 源项目的存档分支，测试 cursor、windsuf 可基于这个分支创建测试分支
 - main：测试 gru
 
 # Grpcfuse
