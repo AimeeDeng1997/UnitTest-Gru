@@ -6,6 +6,8 @@ import (
 
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/stretchr/testify/assert"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/chiyutianyi/grpcfuse/fuse2grpc"
 	"github.com/chiyutianyi/grpcfuse/pb"
@@ -134,31 +136,71 @@ func (m *mockRawFileSystem) StatFs(cancel <-chan struct{}, header *fuse.InHeader
 func (m *mockRawFileSystem) Destroy() {}
 
 func TestStatFs(t *testing.T) {
-	mock := &mockRawFileSystem{status: fuse.OK}
-	server := fuse2grpc.NewServer(mock)
-
-	req := &pb.StatfsRequest{
-		Input: &pb.InHeader{
-			NodeId: 1,
-			Caller: &pb.Caller{
-				Owner: &pb.Owner{
-					Uid: 1000,
-					Gid: 1000,
-				},
-				Pid: 1234,
+	tests := []struct {
+		name           string
+		status         fuse.Status
+		expectedError  error
+		expectedStatus *pb.Status
+		expectedResp   *pb.StatfsResponse
+	}{
+		{
+			name:          "success",
+			status:        fuse.OK,
+			expectedError: nil,
+			expectedResp: &pb.StatfsResponse{
+				Status:  &pb.Status{Code: 0},
+				Blocks:  1000,
+				Bfree:   500,
+				Bavail:  400,
+				Files:   100,
+				Ffree:   50,
+				Bsize:   4096,
+				NameLen: 255,
+				Frsize:  4096,
+			},
+		},
+		{
+			name:           "not implemented",
+			status:         fuse.ENOSYS,
+			expectedError:  status.Errorf(codes.Unimplemented, "method StatFS not implemented"),
+			expectedStatus: nil,
+		},
+		{
+			name:   "error status",
+			status: fuse.EACCES,
+			expectedResp: &pb.StatfsResponse{
+				Status: &pb.Status{Code: int32(fuse.EACCES)},
 			},
 		},
 	}
 
-	resp, err := server.StatFs(context.Background(), req)
-	assert.NoError(t, err)
-	assert.Equal(t, int32(0), resp.Status.Code)
-	assert.Equal(t, uint64(1000), resp.Blocks)
-	assert.Equal(t, uint64(500), resp.Bfree)
-	assert.Equal(t, uint64(400), resp.Bavail)
-	assert.Equal(t, uint64(100), resp.Files)
-	assert.Equal(t, uint64(50), resp.Ffree)
-	assert.Equal(t, uint32(4096), resp.Bsize)
-	assert.Equal(t, uint32(255), resp.NameLen)
-	assert.Equal(t, uint32(4096), resp.Frsize)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := &mockRawFileSystem{status: tt.status}
+			server := fuse2grpc.NewServer(mock)
+
+			req := &pb.StatfsRequest{
+				Input: &pb.InHeader{
+					NodeId: 1,
+					Caller: &pb.Caller{
+						Owner: &pb.Owner{
+							Uid: 1000,
+							Gid: 1000,
+						},
+						Pid: 1234,
+					},
+				},
+			}
+
+			resp, err := server.StatFs(context.Background(), req)
+
+			if tt.expectedError != nil {
+				assert.Error(t, err)
+				assert.Equal(t, tt.expectedError.Error(), err.Error())
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, tt.expectedResp, resp)
+			}
+		})
+	}
 }
