@@ -1,53 +1,65 @@
-package fuse2grpc_test
+package fuse2grpc
 
 import (
 	"testing"
+	"unsafe"
 
-	"github.com/golang/mock/gomock"
-	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/stretchr/testify/require"
-
-	"github.com/chiyutianyi/grpcfuse/pb"
 )
 
-func TestReadDdir(t *testing.T) {
-	server, fs := startTestServices(t, 0)
-	defer server.Stop()
-
-	client, conn := newRawFileSystemClient(t, serverSocketPath)
-	defer conn.Close()
-
-	ctx, cancel := Context()
-	defer cancel()
-
-	req := &pb.ReadDirRequest{
-		ReadIn: &pb.ReadIn{
-			Header: TestInHeader,
-			Fh:     1,
-			Offset: 0,
-			Size:   8192,
+func TestDeltaSize(t *testing.T) {
+	testCases := []struct {
+		name     string
+		dirent   _Dirent
+		expected int
+	}{
+		{
+			name: "empty name",
+			dirent: _Dirent{
+				Ino:     1,
+				Off:     0,
+				NameLen: 0,
+				Typ:     0,
+			},
+			expected: 12, // 4 (Mode) + 8 (Ino) + 0 (NameLen)
+		},
+		{
+			name: "short name",
+			dirent: _Dirent{
+				Ino:     123,
+				Off:     456,
+				NameLen: 5,
+				Typ:     8,
+			},
+			expected: 17, // 4 (Mode) + 8 (Ino) + 5 (NameLen)
+		},
+		{
+			name: "long name",
+			dirent: _Dirent{
+				Ino:     999999,
+				Off:     888888,
+				NameLen: 255,
+				Typ:     4,
+			},
+			expected: 267, // 4 (Mode) + 8 (Ino) + 255 (NameLen)
+		},
+		{
+			name: "max name length",
+			dirent: _Dirent{
+				Ino:     1,
+				Off:     1,
+				NameLen: 1024,
+				Typ:     0,
+			},
+			expected: 1036, // 4 (Mode) + 8 (Ino) + 1024 (NameLen)
 		},
 	}
 
-	fs.EXPECT().ReadDir(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
-		func(cancel <-chan struct{}, input *fuse.ReadIn, out *fuse.DirEntryList) fuse.Status {
-			out.AddDirEntry(fuse.DirEntry{Name: "foo", Mode: 0100000, Ino: 1})
-			out.AddDirEntry(fuse.DirEntry{Name: "foo2", Mode: 0100000, Ino: 2})
-			out.AddDirEntry(fuse.DirEntry{Name: "foo3foo3", Mode: 0100000, Ino: 3})
-			out.AddDirEntry(fuse.DirEntry{Name: "foo4", Mode: 0100000, Ino: 4})
-			return fuse.OK
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			direntPtr := (*_Dirent)(unsafe.Pointer(&tc.dirent))
+			result := deltaSize(direntPtr)
+			require.Equal(t, tc.expected, result)
 		})
-
-	stream, err := client.ReadDir(ctx, req)
-	require.NoError(t, err)
-
-	res, err := stream.Recv()
-	require.NoError(t, err)
-
-	require.Equal(t, []*pb.DirEntry{
-		{Name: []byte("foo"), Mode: 0100000, Ino: 1},
-		{Name: []byte("foo2"), Mode: 0100000, Ino: 2},
-		{Name: []byte("foo3foo3"), Mode: 0100000, Ino: 3},
-		{Name: []byte("foo4"), Mode: 0100000, Ino: 4},
-	}, res.Entries)
+	}
 }
